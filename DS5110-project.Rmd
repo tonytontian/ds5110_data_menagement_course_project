@@ -1,0 +1,207 @@
+---
+title: "DS5110-project"
+author: "Zishen Li"
+date: "2018/10/28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 1.Introduction
+
+fullvisitorId should be string to be unique in the data set
+
+# 2.Enviorment
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(jsonlite)
+library(tidyr)
+library(lubridate)
+```
+
+# 3.Tidy data and data exploration
+
+## 3.1 Import and tidy the data
+
+Here we only import the train set since the test set of the competition does not provide the total revenue, which is our prediction target. Therefore, we choose to work on the training set and partition it into train, validation and test set.
+
+```{r}
+train <- read.csv("/Users/mbp/Desktop/NEU/intro data managment/project/data/train.csv", na = NA)
+
+dim(train)
+sapply(train, class)
+train[1,]
+```
+
+The data set has 12 variables and 903,653 observations. There are 4 columns with JSON format. Moreover, as mentioned in the introduction, we change the data type of fullvisitorId to character as well.
+
+```{r}
+library(jsonlite)
+
+# Build a function to tidy the data set
+
+tidy <- function(data,data_o){
+  for (i in 1:4){
+  first <- str_c(data[,i], collapse = ",")
+  second <- str_c("[", first, "]")
+  data_o <- cbind(data_o,fromJSON(second, flatten = TRUE))
+  }
+  data_o$fullVisitorId <- as.character(data_o$fullVisitorId)
+  return(select(data_o, -device, -geoNetwork, -trafficSource, -totals))
+}
+
+train_tidy <- tidy(train[,c(3,5,8,9)], train)
+dim(train_tidy)
+sum(sapply(train_tidy, class) == "logical")
+sum(sapply(train_tidy, class) == "character")
+sum(sapply(train_tidy, class) == "factor")
+sum(sapply(train_tidy, class) == "integer")
+```
+
+After parse the JSON format and tidy the data, we get a data set with 55 variales. 48 of them are character variables, 4 are numerical variables and 3 are boolean variables.
+
+## 3.2 Data exploration
+
+### 3.2.1 General introduction
+
+```{r}
+# Distinct values of each variable
+distinct_value <- sapply(train_tidy,n_distinct)
+distinct_value <- as.data.frame(distinct_value)
+names(distinct_value) <-"num_distinct_values" 
+distinct_value <- distinct_value %>%
+  rownames_to_column("colnames") %>%
+  mutate(colnames = reorder(colnames, -num_distinct_values))
+
+constant <- filter(distinct_value,num_distinct_values == 1)
+constant
+
+```
+
+There are 19 variables with constant value, which have no contribution to model we will build later. We remove those columns.
+
+```{r}
+del <- constant$colnames
+del <- as.character(del)
+train_tidy_s <- select(train_tidy,-del)
+
+```
+
+
+### 3.2.2 Missing value
+
+Explore the distribution of the missing value of each variable in the data set.
+
+```{r}
+# Set the explanatory variable to x, response variable to y
+x <- select(train_tidy_s, -transactionRevenue)
+y <- train_tidy_s$transactionRevenue %>%
+  as.numeric()
+# Format transformation
+x$channelGrouping <- as.character(x$channelGrouping)
+x$sessionId <- as.character(x$sessionId)
+# Change all kinds of missing values into NA.
+x <- mutate_all(x,function(a) ifelse(a %in% 
+                                       c("not available in demo dataset",
+                                         "(not provided)",
+                                         "(not set)",
+                                         "<NA>",
+                                         "unknown.unknown", 
+                                         "(none)"), NA, a))
+
+missing_rate <- sapply(x, function(a) mean(is.na(a)))
+missing_rate%>%
+  as.data.frame()%>%
+  rename(missing_rate = '.')%>%
+  rownames_to_column("colnames")%>%
+  mutate(colnames = reorder(colnames,missing_rate))%>%
+  ggplot()+
+  geom_col(aes(colnames, missing_rate))+
+  coord_flip()
+
+```
+
+We find there are 15 variables has more than 50% missing value rate. Further more we find the column "campaignCode" only have one none-NA value, which is useless in the later modeling. Thus we remove this column.
+
+```{r}
+sum(missing_rate>0.5)
+```
+
+
+```{r}
+missing_rate["campaignCode"]
+sum(!is.na(x$campaignCode))
+unique(x$campaignCode)
+x <- select(x,-campaignCode)
+```
+
+For the response variable, it has relatively high missing value rate, 98%.
+
+```{r}
+summary(y)
+mean(is.na(y))
+```
+
+Intuitively, such high missing value rate may due to high proportion of customers who usually need multiple visits to complete the online purchase. Based on that assumption, we could repalce thoes NAs with 0.
+
+```{r}
+y[is.na(y)] <- 0
+summary(y)
+```
+
+### 3.2.3 distribution of response variable
+
+```{r}
+# The distribution of revenue
+y %>% as.data.frame()%>%
+  rename(revenue = '.')%>%
+  ggplot(aes(1:length(revenue), revenue))+
+    geom_point(alpha = 0.5)
+# The distribution of log revenue
+y %>% as.data.frame()%>%
+  rename(revenue = '.')%>%
+  ggplot()+
+    geom_histogram(aes(log(revenue)))
+  
+```
+
+As mentioned above, a large part of the revenue is 0. Since our target is to predict log of revenue, we also plot the distribution of log(revenue) which is a little bit right skew.
+
+
+### 3.2.4 distribution of explanatory variables(ZHANG DUO)
+
+```{r}
+
+```
+
+
+### 3.2.5 Correlations among explanatory variables(DORIS)
+
+```{r}
+
+```
+
+### 3.2.6 Correlations between explanatory variables and response variables(ZHANG DUO/DORIS)
+
+```{r}
+
+```
+
+
+### 3.2.X Preparation for modeling
+
+```{r}
+# Transformation of some columns
+x <- x%>%
+  mutate(date = ymd(date), visitId = as.character(visitId),
+         hits = as.integer(hits),pageviews = as.integer(pageviews),
+         bounces = as.integer(bounces),
+         newVisits = as.integer(newVisits))
+```
+
+
