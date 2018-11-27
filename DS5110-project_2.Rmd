@@ -232,6 +232,7 @@ We pick some variables with few missing values, to see their distribution in the
 ### 3.2.6 Correlations between explanatory variables and response variables(ZHANG DUO/DORIS)
 
 ```{r}
+x <- cbind(x, y)
 x %>%
   group_by(channelGrouping) %>%
   summarize(total_revenue = sum(y)) %>%
@@ -316,6 +317,9 @@ x %>%
   mutate(medium=reorder(medium, total_revenue)) %>%
   ggplot(aes(x=medium, y=total_revenue)) +
   geom_bar(stat = "identity")
+
+x <- x%>%
+  mutate(date = ymd(date))
 
   x %>% 
   group_by(date) %>% 
