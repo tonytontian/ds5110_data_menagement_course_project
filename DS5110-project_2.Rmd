@@ -1,0 +1,349 @@
+---
+title: "DS5110-project"
+author: "Zishen Li"
+date: "2018/10/28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 1.Introduction
+
+fullvisitorId should be string to be unique in the data set
+
+# 2.Enviorment
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(jsonlite)
+library(tidyr)
+library(lubridate)
+```
+
+# 3.Tidy data and data exploration
+
+## 3.1 Import and tidy the data
+
+Here we only import the train set since the test set of the competition does not provide the total revenue, which is our prediction target. Therefore, we choose to work on the training set and partition it into train, validation and test set.
+
+```{r}
+train <- read.csv("train.csv", na = NA)
+
+dim(train)
+sapply(train, class)
+train[1,]
+```
+
+The data set has 12 variables and 903,653 observations. There are 4 columns with JSON format. Moreover, as mentioned in the introduction, we change the data type of fullvisitorId to character as well.
+
+```{r}
+library(jsonlite)
+
+# Build a function to tidy the data set
+
+tidy <- function(data,data_o){
+  for (i in 1:4){
+  first <- str_c(data[,i], collapse = ",")
+  second <- str_c("[", first, "]")
+  data_o <- cbind(data_o,fromJSON(second, flatten = TRUE))
+  }
+  data_o$fullVisitorId <- as.character(data_o$fullVisitorId)
+  return(select(data_o, -device, -geoNetwork, -trafficSource, -totals))
+}
+
+train_tidy <- tidy(train[,c(3,5,8,9)], train)
+dim(train_tidy)
+sum(sapply(train_tidy, class) == "logical")
+sum(sapply(train_tidy, class) == "character")
+sum(sapply(train_tidy, class) == "factor")
+sum(sapply(train_tidy, class) == "integer")
+```
+
+After parse the JSON format and tidy the data, we get a data set with 55 variales. 48 of them are character variables, 4 are numerical variables and 3 are boolean variables.
+
+## 3.2 Data exploration
+
+### 3.2.1 General introduction
+
+```{r}
+# Distinct values of each variable
+distinct_value <- sapply(train_tidy,n_distinct)
+distinct_value <- as.data.frame(distinct_value)
+names(distinct_value) <-"num_distinct_values" 
+distinct_value <- distinct_value %>%
+  rownames_to_column("colnames") %>%
+  mutate(colnames = reorder(colnames, -num_distinct_values))
+
+constant <- filter(distinct_value,num_distinct_values == 1)
+constant
+
+```
+
+There are 19 variables with constant value, which have no contribution to model we will build later. We remove those columns.
+
+```{r}
+del <- constant$colnames
+del <- as.character(del)
+train_tidy_s <- select(train_tidy,-del)
+
+```
+
+
+### 3.2.2 Missing value
+
+Explore the distribution of the missing value of each variable in the data set.
+
+```{r}
+# Set the explanatory variable to x, response variable to y
+x <- select(train_tidy_s, -transactionRevenue)
+y <- train_tidy_s$transactionRevenue %>%
+  as.numeric()
+# Format transformation
+x$channelGrouping <- as.character(x$channelGrouping)
+x$sessionId <- as.character(x$sessionId)
+# Change all kinds of missing values into NA.
+x <- mutate_all(x,function(a) ifelse(a %in% 
+                                       c("not available in demo dataset",
+                                         "(not provided)",
+                                         "(not set)",
+                                         "<NA>",
+                                         "unknown.unknown", 
+                                         "(none)"), NA, a))
+
+missing_rate <- sapply(x, function(a) mean(is.na(a)))
+missing_rate%>%
+  as.data.frame()%>%
+  rename(missing_rate = '.')%>%
+  rownames_to_column("colnames")%>%
+  mutate(colnames = reorder(colnames,missing_rate))%>%
+  ggplot()+
+  geom_col(aes(colnames, missing_rate))+
+  coord_flip()
+
+```
+
+We find there are 15 variables has more than 50% missing value rate. Further more we find the column "campaignCode" only have one none-NA value, which is useless in the later modeling. Thus we remove this column.
+
+```{r}
+sum(missing_rate>0.5)
+```
+
+
+```{r}
+missing_rate["campaignCode"]
+sum(!is.na(x$campaignCode))
+unique(x$campaignCode)
+x <- select(x,-campaignCode)
+```
+
+For the response variable, it has relatively high missing value rate, 98%.
+
+```{r}
+summary(y)
+mean(is.na(y))
+```
+
+Intuitively, such high missing value rate may due to high proportion of customers who usually need multiple visits to complete the online purchase. Based on that assumption, we could repalce thoes NAs with 0.
+
+```{r}
+y[is.na(y)] <- 0
+summary(y)
+```
+
+### 3.2.3 distribution of response variable
+
+```{r}
+# The distribution of revenue
+y %>% as.data.frame()%>%
+  rename(revenue = '.')%>%
+  ggplot(aes(1:length(revenue), revenue))+
+    geom_point(alpha = 0.5)
+# The distribution of log revenue
+y %>% as.data.frame()%>%
+  rename(revenue = '.')%>%
+  ggplot()+
+    geom_histogram(aes(log(revenue)))
+  
+```
+
+As mentioned above, a large part of the revenue is 0. Since our target is to predict log of revenue, we also plot the distribution of log(revenue) which is a little bit right skew.
+
+
+### 3.2.4 distribution of explanatory variables(ZHANG DUO)
+
+```{r}
+ggplot(data=x,aes(reorder(channelGrouping,rep(1,length(channelGrouping)),sum)))+geom_bar()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ labs(x="channelGrouping", y = "visits")
+
+ggplot(data=x,aes(reorder(browser,rep(1,length(browser)),sum)))+geom_bar()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ labs(x="browser", y = "visits")
+
+ggplot(data=x,aes(reorder(operatingSystem,rep(1,length(operatingSystem)),sum)))+geom_bar()+theme(axis.text.x = element_text(angle = 45, hjust = 1))+ labs(x="operatingSystem", y = "visits")
+
+ggplot(data=x,aes(reorder(deviceCategory,rep(1,length(deviceCategory)),sum)))+geom_bar()+theme(axis.text.x = element_text(angle = 45, hjust = 1))+ labs(x="deviceCategory", y = "visits")
+
+ggplot(data=x,aes(reorder(continent,rep(1,length(continent)),sum)))+geom_bar()+theme(axis.text.x = element_text(angle = 45, hjust = 1))+ labs(x="continent", y = "visits")
+
+ggplot(data=x,aes(reorder(subContinent,rep(1,length(subContinent)),sum)))+geom_bar()+theme(axis.text.x = element_text(angle = 45, hjust = 1))+ labs(x="subContinent", y = "visits")
+
+x %>%
+  count(country, sort=TRUE) %>% 
+  top_n(5) %>%
+  mutate(country=reorder(country, n)) %>%
+  ggplot(aes(x=country, y=n)) + 
+  geom_col()+ labs(y = "visits")
+
+x %>%
+  count(city, sort=TRUE) %>% 
+  top_n(5) %>%
+  mutate(city=reorder(city, n)) %>%
+  ggplot(aes(x=city, y=n)) + 
+  geom_col()+ labs(y = "visits")
+
+x %>%
+  count(networkDomain, sort=TRUE) %>% 
+  top_n(5) %>%
+  mutate(networkDomain=reorder(networkDomain, n)) %>%
+  ggplot(aes(x=networkDomain, y=n)) + 
+  geom_col()+ labs(y = "visits")
+
+x %>%
+  count(source, sort=TRUE) %>% 
+  top_n(5) %>%
+  mutate(source=reorder(source, n)) %>%
+  ggplot(aes(x=source, y=n)) + 
+  geom_col()+ labs(y = "visits")
+
+ggplot(data=x,aes(reorder(medium,rep(1,length(medium)),sum)))+geom_bar()+theme(axis.text.x = element_text(angle = 45, hjust = 1))+ labs(x="medium", y = "visits")
+
+```
+We pick some variables with few missing values, to see their distribution in the increasing order. These explanatory variables include channelGrouping, browser, operatingSystem, deviceCategory, continent, subContinent, country, city, networkDomanin, source, medium. We can see the most frequent channels are Organic Search and Social. The Chrome and Safari are the most two popular browsers. Windows and Macintosh are the two most popular operating system. The United State is the country that has the most visitors. And people of Mountain View are more active. Google and youtube are the two main sources, organic and referral are the two most popular mediums. 
+
+### 3.2.5 Correlations among explanatory variables(DORIS)
+
+```{r}
+
+```
+
+### 3.2.6 Correlations between explanatory variables and response variables(ZHANG DUO/DORIS)
+
+```{r}
+x %>%
+  group_by(channelGrouping) %>%
+  summarize(total_revenue = sum(y)) %>%
+  mutate(channelGrouping=reorder(channelGrouping, total_revenue)) %>%
+  ggplot(aes(channelGrouping, total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(browser) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(browser=reorder(browser, total_revenue)) %>%
+  ggplot(aes(x=browser, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(operatingSystem) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(operatingSystem=reorder(operatingSystem, total_revenue)) %>%
+  ggplot(aes(x=operatingSystem, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(deviceCategory) %>%
+  summarize(total_revenue = sum(y)) %>%
+  mutate(deviceCategory=reorder(deviceCategory, total_revenue)) %>%
+  ggplot(aes(deviceCategory, total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(continent) %>%
+  summarize(total_revenue = sum(y)) %>%
+  mutate(continent=reorder(continent, total_revenue)) %>%
+  ggplot(aes(continent, total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(subContinent) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(subContinent=reorder(subContinent, total_revenue)) %>%
+  ggplot(aes(x=subContinent, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(country) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(country=reorder(country, total_revenue)) %>%
+  ggplot(aes(x=country, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(city) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(city=reorder(city, total_revenue)) %>%
+  ggplot(aes(x=city, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(networkDomain) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(networkDomain=reorder(networkDomain, total_revenue)) %>%
+  ggplot(aes(x=networkDomain, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(source) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(source=reorder(source, total_revenue)) %>%
+  ggplot(aes(x=source, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+x %>%
+  group_by(medium) %>%
+  summarize(total_revenue = sum(y)) %>%
+  top_n(5) %>%
+  mutate(medium=reorder(medium, total_revenue)) %>%
+  ggplot(aes(x=medium, y=total_revenue)) +
+  geom_bar(stat = "identity")
+
+  x %>% 
+  group_by(date) %>% 
+  summarize(visits = n()) %>% 
+  ggplot(aes(x = date, y = visits)) + 
+  geom_line() +
+  geom_smooth() 
+  
+  x %>% 
+  group_by(date) %>% 
+  summarize(revenue = mean(y)) %>% 
+  ggplot(aes(x = date, y = revenue)) + 
+  geom_line() +
+  stat_smooth() 
+
+```
+In this section, we want to discuss the correlations between variables we pick in 3.2.4 and the total revenue. We see that Direct and Referral are the two channels that contribute to the total revenue most, not the Organic Search and Social which are the two most popular ones. Users from Chrome produce the highest total revenue. Macintosh and Windows still produce the highest total revenue. Visitors use desktop most frequently and it contributes most total revenue. The US users yield most total revenue and users in New York contribute more. As for the source, mall.googleplex.com contributes the most of total revenue. Organic and Referral are still the most useful mediums. 
+Then, we consider the visits and revenue themselves as timeseries. There is the peak visit time between Oct 2016 and Jan 2017. However, during this time, the revenue is very low. The time of peak revenue is around Apr 2017. 
+
+### 3.2.X Preparation for modeling
+
+```{r}
+# Transformation of some columns
+x <- x%>%
+  mutate(date = ymd(date), visitId = as.character(visitId),
+         hits = as.integer(hits),pageviews = as.integer(pageviews),
+         bounces = as.integer(bounces),
+         newVisits = as.integer(newVisits))
+```
+
+
