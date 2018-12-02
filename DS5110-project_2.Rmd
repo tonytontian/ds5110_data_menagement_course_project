@@ -2,12 +2,17 @@
 title: "DS5110-project"
 author: "Zishen Li"
 date: "2018/10/28"
-output: pdf_document
+output:   pdf_document: 
+    latex_engine: xelatex 
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
+```{r setup} 
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60),# For code 
+                      width = 60)  
+                      # For output 
+options(cli.width = 60) # For tidyverse loading messages 
+``` 
+
 # 1.Introduction
 
 fullvisitorId should be string to be unique in the data set
@@ -226,8 +231,53 @@ We pick some variables with few missing values, to see their distribution in the
 ### 3.2.5 Correlations among explanatory variables(DORIS)
 
 ```{r}
+x %>%
+  group_by(continent, browser) %>% 
+  summarise(total = n()) %>% 
+  top_n(5) %>% 
+  ungroup() %>% 
+  arrange(continent, desc(total)) %>%
+  filter(continent != "NA") %>% 
+  ggplot(aes(x = reorder(browser,-total), y = total)) +
+  geom_bar(stat = "identity") +
+  facet_grid(~continent) +
+  theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+  xlab("Continent") +
+  ylab("Number of browser")
+  
+x %>%
+  group_by(continent, deviceCategory) %>% 
+  summarise(total = n()) %>% 
+  arrange(desc(total)) %>% 
+  filter(continent != "NA") %>% 
+  ggplot(aes(x = reorder(deviceCategory, -total), y = total)) + 
+  geom_bar(stat = "identity") + 
+  facet_grid(~continent) +
+  theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5)) +
+  xlab("Continent") +
+  ylab("Number of Device Category")
 
+x %>%
+  group_by(continent) %>% 
+  mutate(pageviews = as.numeric(pageviews)) %>% 
+  filter(pageviews != "NA", continent != "NA") %>% 
+  summarise(total = sum(pageviews)) %>% 
+  ggplot(aes(x = reorder(continent, -total), y = total)) +
+  geom_bar(stat = "identity") +
+  xlab("Continent") +
+  ylab("Number of Page Views")
+
+x %>%
+  group_by(continent) %>% 
+  mutate(hits = as.numeric(hits)) %>% 
+  filter(hits != "NA", continent != "NA") %>% 
+  summarise(total = sum(hits)) %>% 
+  ggplot(aes(x = reorder(continent, -total), y = total)) +
+  geom_bar(stat = "identity") +
+  xlab("Continent") +
+  ylab("Number of Hits")
 ```
+
 
 ### 3.2.6 Correlations between explanatory variables and response variables(ZHANG DUO/DORIS)
 
